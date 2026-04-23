@@ -175,8 +175,7 @@ def test_prior_chargebacks_one_adds_5():
 # ---------------------------------------------------------------------------
 
 def test_score_minimum_is_zero():
-    score = score_transaction(base_tx())
-    assert score >= 0
+    assert score_transaction(base_tx()) == 0
 
 
 def test_score_maximum_is_100():
@@ -188,7 +187,105 @@ def test_score_maximum_is_100():
         failed_logins_24h=10,
         prior_chargebacks=5,
     ))
-    assert score <= 100
+    assert score == 100
+
+
+# ---------------------------------------------------------------------------
+# Exact threshold boundary crossings
+# Verify the scoring step-change at each tier boundary.
+# ---------------------------------------------------------------------------
+
+def test_device_risk_boundary_40():
+    below = score_transaction(base_tx(device_risk_score=39))
+    at = score_transaction(base_tx(device_risk_score=40))
+    assert at - below == 10
+
+
+def test_device_risk_boundary_70():
+    below = score_transaction(base_tx(device_risk_score=69))
+    at = score_transaction(base_tx(device_risk_score=70))
+    assert at - below == 15  # jumps from +10 to +25
+
+
+def test_amount_boundary_500():
+    below = score_transaction(base_tx(amount_usd=499.99))
+    at = score_transaction(base_tx(amount_usd=500.0))
+    assert at - below == 10
+
+
+def test_amount_boundary_1000():
+    below = score_transaction(base_tx(amount_usd=999.99))
+    at = score_transaction(base_tx(amount_usd=1000.0))
+    assert at - below == 15  # jumps from +10 to +25
+
+
+def test_velocity_boundary_3():
+    below = score_transaction(base_tx(velocity_24h=2))
+    at = score_transaction(base_tx(velocity_24h=3))
+    assert at - below == 5
+
+
+def test_velocity_boundary_6():
+    below = score_transaction(base_tx(velocity_24h=5))
+    at = score_transaction(base_tx(velocity_24h=6))
+    assert at - below == 15  # jumps from +5 to +20
+
+
+def test_failed_logins_boundary_2():
+    below = score_transaction(base_tx(failed_logins_24h=1))
+    at = score_transaction(base_tx(failed_logins_24h=2))
+    assert at - below == 10
+
+
+def test_failed_logins_boundary_5():
+    below = score_transaction(base_tx(failed_logins_24h=4))
+    at = score_transaction(base_tx(failed_logins_24h=5))
+    assert at - below == 10  # jumps from +10 to +20
+
+
+def test_prior_chargebacks_boundary_1():
+    below = score_transaction(base_tx(prior_chargebacks=0))
+    at = score_transaction(base_tx(prior_chargebacks=1))
+    assert at - below == 5
+
+
+def test_prior_chargebacks_boundary_2():
+    below = score_transaction(base_tx(prior_chargebacks=1))
+    at = score_transaction(base_tx(prior_chargebacks=2))
+    assert at - below == 15  # jumps from +5 to +20
+
+
+# ---------------------------------------------------------------------------
+# Exact score for known transactions (regression anchors)
+# ---------------------------------------------------------------------------
+
+def test_exact_score_all_zero_signals():
+    assert score_transaction(base_tx()) == 0
+
+
+def test_exact_score_fully_loaded_high_risk():
+    # device>=70 (+25), international (+15), amount>=1000 (+25),
+    # velocity>=6 (+20), failed_logins>=5 (+20), prior_chargebacks>=2 (+20)
+    # = 125, clamped to 100
+    score = score_transaction(base_tx(
+        device_risk_score=85,
+        is_international=1,
+        amount_usd=1400,
+        velocity_24h=8,
+        failed_logins_24h=7,
+        prior_chargebacks=3,
+    ))
+    assert score == 100
+
+
+def test_exact_score_medium_signals():
+    # device 40-69 (+10), amount 500-999 (+10), velocity 3-5 (+5) = 25
+    score = score_transaction(base_tx(
+        device_risk_score=55,
+        amount_usd=750,
+        velocity_24h=4,
+    ))
+    assert score == 25
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +293,6 @@ def test_score_maximum_is_100():
 # ---------------------------------------------------------------------------
 
 def test_combined_high_risk_scores_high():
-    """Transactions like tx 50003 and 50011 should score in the high bucket."""
     score = score_transaction({
         "device_risk_score": 85,
         "is_international": 1,
@@ -209,7 +305,6 @@ def test_combined_high_risk_scores_high():
 
 
 def test_combined_low_risk_scores_low():
-    """Clean domestic transactions should score low."""
     score = score_transaction({
         "device_risk_score": 8,
         "is_international": 0,
